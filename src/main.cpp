@@ -8,12 +8,12 @@
 #include <limits>
 #include <opencv2/core/utility.hpp>
 #include <opencv2/highgui.hpp>
-#include <opencv2/imgcodecs.hpp>
+#include <opencv2/videoio.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include "callbacks/reconnaissance.h"
 #include "callbacks/tests.h"
-#include "color_distribution.h"
+#include "histogram/histogram.h"
 #include <vector>
 
 using namespace cv;
@@ -24,7 +24,7 @@ int main(int ragc, char **argv) {
   int FPS = 30;
   int BLOC_SIZE = 8;
   float SEUIL_DIST_MIN = 0.08f;
-  const char *SEUIL_DIST_MIN_TRACKBAR_NAME = "SEUIL_DIST_MIN";
+  const char *SEUIL_DIST_MIN_TRACKBAR_NAME = "REFERENCE_ADMISSION_THRESHOLD";
 
   const int SEUIL_DIST_MIN_SCALE = 100;
   const int SEUIL_DIST_MIN_MAX_TRACKBAR = 2 * SEUIL_DIST_MIN_SCALE;
@@ -41,7 +41,7 @@ int main(int ragc, char **argv) {
   // ouvre la cam
   pCap = new VideoCapture(0);
   if (!pCap->isOpened()) {
-    cout << "Ne peux pas ouvrir la caméera";
+    cout << "Ne peux pas ouvrir la caméra";
     return 1;
   }
 
@@ -62,8 +62,8 @@ int main(int ragc, char **argv) {
   Point pt2(width / 2 + size / 2, height / 2 + size / 2);
 
   namedWindow("input", 1);
-  createTrackbar(SEUIL_DIST_MIN_TRACKBAR_NAME, "input", &seuil_dist_min_trackbar,
-                 SEUIL_DIST_MIN_MAX_TRACKBAR);
+  createTrackbar(SEUIL_DIST_MIN_TRACKBAR_NAME, "input",
+                 &seuil_dist_min_trackbar, SEUIL_DIST_MIN_MAX_TRACKBAR);
   imshow("input", img_input);
 
   bool freeze = false;
@@ -77,8 +77,13 @@ int main(int ragc, char **argv) {
    * all_col_hists[2] = objet 2
    * ...
    */
-  std::vector<std::vector<ColorDistribution>> all_col_hists;
-  all_col_hists.resize(2);
+  histogram::ReferenceBank all_col_hists(2);
+  histogram::PredictionOptions prediction_options;
+  prediction_options.block_size = BLOC_SIZE;
+  const histogram::DistanceOptions sse{histogram::DistanceMetric::ChiSquare,
+                                       histogram::Backend::SSE};
+  if (histogram::isAvailable(sse))
+    prediction_options.distance = sse;
 
   /* objet courant pour l'acquisition (mode B) */
   int obj_courant = 1;
@@ -112,9 +117,9 @@ int main(int ragc, char **argv) {
    * Boucle principale
    */
   while (true) {
-    SEUIL_DIST_MIN =
-        static_cast<float>(getTrackbarPos(SEUIL_DIST_MIN_TRACKBAR_NAME, "input")) /
-        static_cast<float>(SEUIL_DIST_MIN_SCALE);
+    SEUIL_DIST_MIN = static_cast<float>(getTrackbarPos(
+                         SEUIL_DIST_MIN_TRACKBAR_NAME, "input")) /
+                     static_cast<float>(SEUIL_DIST_MIN_SCALE);
 
     // 1000 ms -> FPS images
     // ? ms    <- 1 image
@@ -123,6 +128,10 @@ int main(int ragc, char **argv) {
 
     if (pCap != nullptr && !freeze) {
       (*pCap) >> img_input; // recupere le flux
+      if (img_input.empty()) {
+        cerr << "Camera returned an empty frame\n";
+        break;
+      }
       cv::flip(img_input, img_input, 1);
     }
 
@@ -148,14 +157,14 @@ int main(int ragc, char **argv) {
     // (all_col_hists[current_object])
     if (c == 'a') {
       ajout_histogramme_objet(all_col_hists[obj_courant], img_input, pt1, pt2,
-                              SEUIL_DIST_MIN);
+                              SEUIL_DIST_MIN, prediction_options.distance);
       cout << "[a] objet courant = " << obj_courant
            << " / nb hist = " << all_col_hists[obj_courant].size() << endl;
     }
 
     // creer un nouvel objet (option B)
     if (c == 'n') {
-      all_col_hists.push_back(std::vector<ColorDistribution>());
+      all_col_hists.emplace_back();
       obj_courant = all_col_hists.size() - 1;
 
       if (colors.size() < all_col_hists.size()) {
@@ -191,19 +200,21 @@ int main(int ragc, char **argv) {
       }
     }
 
-    Mat out = img_input;
+    Mat out = img_input.clone();
 
     // choix d'image à afficher selon mode reco ou non
     if (reco) {
       Mat gray;
       cvtColor(img_input, gray, COLOR_BGR2GRAY);
 
-      Mat reco_img = recoObject(img_input, all_col_hists, colors, BLOC_SIZE);
+      const Mat labels =
+          histogram::predict(img_input, all_col_hists, prediction_options);
+      Mat reco_img = renderLabels(labels, colors);
 
-      cvtColor(gray, img_input, COLOR_GRAY2BGR);
-      out = 0.5 * reco_img + 0.5 * img_input;
+      cvtColor(gray, gray, COLOR_GRAY2BGR);
+      out = 0.5 * reco_img + 0.5 * gray;
     } else {
-      cv::rectangle(img_input, pt1, pt2, Scalar({255.0, 255.0, 255.0}), 1);
+      cv::rectangle(out, pt1, pt2, Scalar({255.0, 255.0, 255.0}), 1);
     }
 
     imshow("input", out);

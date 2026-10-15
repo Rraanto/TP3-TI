@@ -5,28 +5,37 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(OpenCV REQUIRED)
+option(BUILD_DEMO "Build the camera demonstrator" ON)
+option(HISTOGRAM_ENABLE_SSE "Build the x86-64 SSE chi-square kernel" OFF)
+include(CTest)
 
-add_library(ti_opencv INTERFACE)
-target_include_directories(ti_opencv INTERFACE ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(ti_opencv INTERFACE ${OpenCV_LIBS})
+set(OPENCV_COMPONENTS core)
+if(BUILD_DEMO)
+  list(APPEND OPENCV_COMPONENTS highgui videoio imgproc)
+endif()
+find_package(OpenCV REQUIRED COMPONENTS ${OPENCV_COMPONENTS})
 
-add_library(color_distribution STATIC
-  src/color_distribution/color_distribution.cpp
-  src/color_distribution/color_distribution.h
-)
-target_include_directories(color_distribution PUBLIC ${PROJECT_SOURCE_DIR}/src/color_distribution)
-target_link_libraries(color_distribution PRIVATE ti_opencv)
+add_library(histogram_model STATIC models/histogram/histogram.cpp)
+target_include_directories(histogram_model PUBLIC ${PROJECT_SOURCE_DIR}/models ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(histogram_model PUBLIC opencv_core)
+if(HISTOGRAM_ENABLE_SSE)
+  if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$" OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "HISTOGRAM_ENABLE_SSE currently requires x86-64")
+  endif()
+  target_sources(histogram_model PRIVATE models/histogram/distance_sse.cpp)
+  target_compile_definitions(histogram_model PRIVATE HISTOGRAM_HAS_SSE)
+endif()
 
-add_library(callbacks STATIC
-  src/callbacks/reconnaissance.cpp
-  src/callbacks/reconnaissance.h
-  src/callbacks/tests.cpp
-  src/callbacks/tests.h
-)
-target_link_libraries(callbacks PRIVATE ti_opencv color_distribution)
+if(BUILD_TESTING)
+  add_executable(histogram_tests tests/histogram_tests.cpp)
+  target_link_libraries(histogram_tests PRIVATE histogram_model)
+  target_compile_definitions(histogram_tests PRIVATE EXPECT_SSE=$<BOOL:${HISTOGRAM_ENABLE_SSE}>)
+  add_test(NAME histogram_tests COMMAND histogram_tests)
+endif()
 
-add_executable(main src/main.cpp)
-target_link_libraries(main PRIVATE ti_opencv color_distribution callbacks)
-
-target_compile_options(color_distribution PRIVATE -O3 -mavx2)
+if(BUILD_DEMO)
+  add_library(callbacks STATIC src/callbacks/reconnaissance.cpp src/callbacks/tests.cpp)
+  target_link_libraries(callbacks PUBLIC histogram_model)
+  add_executable(main src/main.cpp)
+  target_link_libraries(main PRIVATE callbacks opencv_highgui opencv_videoio opencv_imgproc)
+endif()

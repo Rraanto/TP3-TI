@@ -2,35 +2,20 @@
 
 #include <iostream>
 
-#include "color_distribution.h"
+#include "histogram/histogram.h"
 
 using namespace cv;
 using namespace std;
 
 void calcul_distance_gauche_droite(const Mat &img_input) {
-  /*
-   * Calcule la distance entre couleurs d'une partie "gauche" et "droite"
-   * définies par des points d'encrages bottom_center, middle_top,
-   * bottom_right, top_left
-   */
-  const int width = img_input.cols;
-  const int height = img_input.rows;
-  const Point top_left(0, 0);
-  const Point bottom_center(width / 2, height - 1);
-  const Point middle_top(width / 2, 0);
-  const Point bottom_right(width - 1, height - 1);
-
-  ColorDistribution left_hist;
-  left_hist =
-      left_hist.getColorDistribution(img_input, top_left, bottom_center);
-  left_hist.finished();
-
-  ColorDistribution right_hist;
-  right_hist =
-      right_hist.getColorDistribution(img_input, middle_top, bottom_right);
-  right_hist.finished();
-
-  float d = left_hist.distance(right_hist);
+  if (img_input.cols < 2 || img_input.empty())
+    return;
+  const int middle = img_input.cols / 2;
+  const auto left = histogram::ColorDistribution::fromImage(
+      img_input, Rect(0, 0, middle, img_input.rows));
+  const auto right = histogram::ColorDistribution::fromImage(
+      img_input, Rect(middle, 0, img_input.cols - middle, img_input.rows));
+  const float d = histogram::distance(left, right);
   cout << "Distance de couleurs: " << d << endl;
 }
 
